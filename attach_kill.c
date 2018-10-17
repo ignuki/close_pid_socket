@@ -1,4 +1,4 @@
-#define _POSIX_SOURCE
+#define _GNU_SOURCE
 
 #include <unistd.h>
 #include <signal.h>
@@ -60,7 +60,7 @@ int main(int argc, char ** argv){
 	struct user_regs_struct registers;
 	ptrace_state state = {&registers, NULL, 0, 0};
 
-	if (pid_attach(pid.pid, registers)) {
+	if (pid_attach(pid.pid, &state)) {
 		return 1;
 	}
 
@@ -109,7 +109,7 @@ int parse_int(char * s){
 
 }
 
-int pid_attach(pid_t pid, state * state){
+int pid_attach(pid_t pid, ptrace_state * state){
 
 	int ret, status;
 	siginfo_t siginfo = {0, 0, 0, 0, 0, 0, 0, 0, 0};
