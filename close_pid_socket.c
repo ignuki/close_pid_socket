@@ -148,6 +148,7 @@ int pid_attach(pid_t pid, ptrace_state * state){
 			return -1;
 		}
 		if(!WIFSTOPPED(status)){
+			/* process is not on foreground */
 			return -1;
 		}
 	} else {
@@ -256,12 +257,16 @@ int pid_inject_syscall(pid_t pid, ptrace_state * state, syscall_regs * regs){
 
 	while (status){
 		if (WIFEXITED(status)){
+			/* process has died naturally */
 			return 1;
 		}
 		if (WIFSIGNALED(status) || WIFCONTINUED(status)){
+			/* process has died by signal or was in background */
 			return -1;
 		}
 		if (WIFSTOPPED(status)){
+			/* process is interrupted by a signal, save it for */
+			/* later and try again                             */
 			signal = WSTOPSIG(status) != SIGTRAP ? status : signal;
 			if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) == -1){
 				return -1;
