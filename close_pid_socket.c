@@ -20,7 +20,7 @@ typedef struct _maps_list {
 	struct _maps_list * prev;
 } maps_list;
 
-typedef struct _state {
+typedef struct _ptrace_state {
 	struct user_regs_struct * registers;
 	struct _maps_list * maps;
 	unsigned long syscall_addr;
