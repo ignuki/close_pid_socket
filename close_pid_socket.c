@@ -1,15 +1,10 @@
-#define _GNU_SOURCE
-
 #include <unistd.h>
-#include <signal.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <fcntl.h>
 #include <sys/ptrace.h>
-#include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/user.h>
-#include <sys/stat.h>
 #include <linux/limits.h>
 
 typedef union _pid_int {
