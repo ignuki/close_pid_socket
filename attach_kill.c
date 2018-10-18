@@ -45,7 +45,7 @@ int pid_detach(pid_t pid, ptrace_state * state);
 int read_maps(pid_t pid, maps_list ** maps);
 maps_list * parse_map(char * buffer);
 void print_maps(maps_list * maps);
-void free_maps(maps_list ** maps);
+void free_maps(maps_list * maps);
 
 /* argv[1] = pid */
 /* argv[2] = fd  */
@@ -129,7 +129,7 @@ unsigned int parse_ui_hex(char * s){
     unsigned int r = 0;
     
     while (*s){
-        r *= 10;
+        r *= 16;
         if (*s <= '9'){
             r += (*s++ - '0');
         } else if (*s <= 'F'){
@@ -148,7 +148,7 @@ unsigned long parse_ul_hex(char * s){
     unsigned long r = 0;
     
     while (*s){
-        r *= 10;
+        r *= 16;
         if (*s <= '9'){
             r += (*s++ - '0');
         } else if (*s <= 'F'){
@@ -220,7 +220,7 @@ int pid_detach(pid_t pid, ptrace_state * state){
     }
     
 	ptrace(PTRACE_DETACH, pid, NULL, NULL);
-    free_maps(&state->maps);
+    free_maps(state->maps);
 
     return 0;
 
@@ -232,7 +232,7 @@ int read_maps(pid_t pid, maps_list ** maps){
         return -1;
     }
 
-	maps_list * head = *maps, * tail = *maps, * tmp;
+	maps_list * head = *maps, * tail = *maps, * tmp = NULL;
 	char * buffer, * p;
 	int fd, buf_len = getpagesize();
 
@@ -261,7 +261,6 @@ int read_maps(pid_t pid, maps_list ** maps){
             head = tmp;
             tail = tmp;
         } else {
-            print_maps(head);
             tail->next = tmp;
             tmp->prev = tail;
             tail = tmp;
@@ -278,7 +277,8 @@ int read_maps(pid_t pid, maps_list ** maps){
 err:
 	close(fd);
 	free(buffer);
-	free_maps(maps);
+	free_maps(*maps);
+    *maps = NULL;
 
 	return -1;
 
@@ -293,7 +293,7 @@ maps_list * parse_map(char * buffer){
         return NULL;
     }
 
-	if ((new = malloc(sizeof(new[0]))) == NULL){
+	if ((new = calloc(1, sizeof(new[0]))) == NULL){
 		return NULL;
 	}
 
@@ -337,7 +337,8 @@ maps_list * parse_map(char * buffer){
     *q = 0;
     new->inode = parse_ul_hex(p);
 
-    p = ++q;
+    while (*++q == ' ');
+    p = q;
     snprintf(new->path, (PATH_MAX - 1), "%s", p);
 
 	return new;
@@ -351,10 +352,10 @@ void print_maps(maps_list * head){
         printf("--------------------------------------------------------------------------------\n");   
         printf("start_address:\t\t%lx\n", head->start);
         printf("end_address:\t\t%lx\n", head->end);
-        printf("perms:\t\t\t%05x\n", head->perms);
+        printf("perms:\t\t\t%u\n", head->perms);
         printf("offset:\t\t\t%lx\n", head->offset);
-        printf("dev_major:\t\t%x\n", head->dev_major);
-        printf("dev_minor:\t\t%x\n", head->dev_minor);
+        printf("dev_major:\t\t%u\n", head->dev_major);
+        printf("dev_minor:\t\t%u\n", head->dev_minor);
         printf("inode:\t\t\t%lx\n", head->inode);
         printf("pathname:\t\t%s\n", head->path);
         printf("parse_maps *next:\t%lx\n", (unsigned long) head->next);
@@ -364,17 +365,17 @@ void print_maps(maps_list * head){
     }
 }
 
-void free_maps(maps_list ** maps){
+void free_maps(maps_list * maps){
     
     if (maps == NULL){
         return;
     }
     maps_list * tmp;
 
-    while(*maps){
-        tmp = maps[0]->next;
-        free(*maps);
-        *maps = tmp;
+    while(maps){
+        tmp = maps->next;
+        free(maps);
+        maps = tmp;
     }
 
     return;
