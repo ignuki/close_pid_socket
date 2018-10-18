@@ -43,7 +43,6 @@ typedef struct _syscall_regs {
 } syscall_regs;
 
 int parse_int(char * s);
-unsigned int parse_ui_hex(char * s);
 unsigned long parse_ul_hex(char * s);
 int pid_attach(pid_t pid, ptrace_state * state);
 int pid_detach(pid_t pid, ptrace_state * state);
@@ -112,25 +111,6 @@ int parse_int(char * s){
 	while (*s){
 		r *= 10;
 		r += (*s++ - '0');
-	}
-
-	return r;
-
-}
-
-unsigned int parse_ui_hex(char * s){
-
-	unsigned int r = 0;
-
-	while (*s){
-		r *= 16;
-		if (*s <= '9'){
-			r += (*s++ - '0');
-		} else if (*s <= 'F'){
-			r += (*s++ - 'A') + 10;
-		} else {
-			r += (*s++ - 'a') + 10;
-		}
 	}
 
 	return r;
