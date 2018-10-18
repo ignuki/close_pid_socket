@@ -30,9 +30,6 @@ typedef struct _maps_list {
 	struct _maps_list * prev;
 } maps_list;
 
-#define UPDATE_MAPS_LIST(h, t, k) \
-    t = k->prev = t, (t = h ? t : (h = h ? h : k))->next = k
-
 typedef struct _state {
 	struct user_regs_struct * registers;
 	struct _maps_list * maps;
@@ -47,6 +44,7 @@ int pid_attach(pid_t pid, ptrace_state * state);
 int pid_detach(pid_t pid, ptrace_state * state);
 int read_maps(pid_t pid, maps_list ** maps);
 maps_list * parse_map(char * buffer);
+void print_maps(maps_list * maps);
 void free_maps(maps_list ** maps);
 
 /* argv[1] = pid */
@@ -73,6 +71,9 @@ int main(int argc, char ** argv){
         printf("Error attaching\n");
 		return 1;
 	}
+
+    print_maps(state.maps);
+
 	if (pid_detach(pid.pid, &state)) {
         printf("Error detaching\n");
 		return 1;
@@ -190,15 +191,16 @@ int pid_attach(pid_t pid, ptrace_state * state){
 		return -1;
 	}
 
-	/* is the next instruction a syscall? */
-	unsigned long data = ptrace(PTRACE_PEEKTEXT, pid,
-				    state->registers->rip - 2, NULL);
-	/* the syscall interrupt code is 2 bytes long (0x050f) */
-	if ((0x000000000000ffff & data) == 0x050f){
-		/* Success finding the syscall interrupt address*/
-		state->syscall_addr = state->registers->rip - 2;
-		return 0;
-	}
+//	/* is the next instruction a syscall? */
+//	unsigned long data = ptrace(PTRACE_PEEKTEXT, pid,
+//				    state->registers->rip - 2, NULL);
+//	/* the syscall interrupt code is 2 bytes long (0x050f) */
+//	if ((0x000000000000ffff & data) == 0x050f){
+//		/* Success finding the syscall interrupt address*/
+//		state->syscall_addr = state->registers->rip - 2;
+//        printf("Lucky\n");
+//		return 0;
+//	}
 
 	/* find the interrupt address across the memory maps of the process */
 	maps_list * maps = NULL;
@@ -255,9 +257,18 @@ int read_maps(pid_t pid, maps_list ** maps){
 		if (tmp == NULL){
 			goto err;
 		}
-		UPDATE_MAPS_LIST(head, tail, tmp);
+        if (head == NULL){
+            head = tmp;
+            tail = tmp;
+        } else {
+            print_maps(head);
+            tail->next = tmp;
+            tmp->prev = tail;
+            tail = tmp;
+        }
 		p = buffer;
 	}
+    *maps = head;
 
 	close(fd);
 	free(buffer);
@@ -331,6 +342,26 @@ maps_list * parse_map(char * buffer){
 
 	return new;
 
+}
+
+void print_maps(maps_list * head){
+    while(head){
+        printf("--------------------------------------------------------------------------------\n");   
+        printf("node: %lx\n", (unsigned long) head);
+        printf("--------------------------------------------------------------------------------\n");   
+        printf("start_address:\t\t%lx\n", head->start);
+        printf("end_address:\t\t%lx\n", head->end);
+        printf("perms:\t\t\t%05x\n", head->perms);
+        printf("offset:\t\t\t%lx\n", head->offset);
+        printf("dev_major:\t\t%x\n", head->dev_major);
+        printf("dev_minor:\t\t%x\n", head->dev_minor);
+        printf("inode:\t\t\t%lx\n", head->inode);
+        printf("pathname:\t\t%s\n", head->path);
+        printf("parse_maps *next:\t%lx\n", (unsigned long) head->next);
+        printf("parse_maps *previous:\t%lx\n", (unsigned long) head->prev);
+        printf("\n");
+        head = head->next;
+    }
 }
 
 void free_maps(maps_list ** maps){
