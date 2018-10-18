@@ -48,7 +48,7 @@ unsigned long parse_ul_hex(char * s);
 int pid_attach(pid_t pid, ptrace_state * state);
 int pid_detach(pid_t pid, ptrace_state * state);
 int pid_inject_syscall(pid_t pid, ptrace_state * state, syscall_regs * regs);
-unsigned long find_syscall_addr(pid_t pid, maps_list * maps);
+unsigned long find_syscall_addr(pid_t pid, maps_list * map);
 int read_maps(pid_t pid, maps_list ** maps);
 maps_list * parse_map(char * buffer);
 void free_maps(maps_list * maps);
@@ -78,11 +78,10 @@ int main(int argc, char ** argv){
 		return 1;
 	}
 
-//	registers.rax = 4; //__NR_close;
-//	registers.rax = 4; //__NR_shutdown;
-//	registers.rdi = fd;
+	/* registers.rax = 4;  --> __NR_close;   */
+	/* registers.rax = 48; -->__NR_shutdown; */
 	printf("Shutdown socket...\n");
-	syscall_regs mod_regs = {4, fd, 2, 0, 0, 0, 0};
+	syscall_regs mod_regs = {48, fd, 2, 0, 0, 0, 0};
 	int ret = pid_inject_syscall(pid.pid, &state, &mod_regs);
 	if (ret == -1){
 		printf("Error injecting syscall.\n");
@@ -236,15 +235,16 @@ int pid_detach(pid_t pid, ptrace_state * state){
 
 }
 
-unsigned long find_syscall_addr(pid_t pid, maps_list * maps){
+unsigned long find_syscall_addr(pid_t pid, maps_list * map){
 
-	if (maps == NULL){
+	if (map == NULL){
 		return 0;
 	}
 
-	for (unsigned long i = maps->start; i < (maps->end - sizeof(i)); i++){
+	for (unsigned long i = map->start; i < (map->end - sizeof(i)); i++){
 		unsigned long data = ptrace(PTRACE_PEEKTEXT, pid, i, NULL);
 		if ((0x000000000000ffff & data) == 0x050f){
+			printf("asdad\n");
 			return i;
 		}
 	}
@@ -274,13 +274,12 @@ int pid_inject_syscall(pid_t pid, ptrace_state * state, syscall_regs * regs){
 	}
 
 	int status = 0, signal = 0;
-retry:
 	if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) == -1){
 		return -1;
 	}
 	waitpid(pid, &status, 0);
 
-	if (status){
+	while (status){
 		if (WIFEXITED(status)){
 			return 1;
 		}
@@ -289,7 +288,10 @@ retry:
 		}
 		if (WIFSTOPPED(status)){
 			signal = WSTOPSIG(status) != SIGTRAP ? status : signal;
-			goto retry;
+			if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) == -1){
+				return -1;
+			}
+			waitpid(pid, &status, 0);
 		}
 	}
 
@@ -335,7 +337,11 @@ int read_maps(pid_t pid, maps_list ** maps){
 		*(p - 1) = 0;
 		tmp = parse_map(buffer);
 		if (tmp == NULL){
-			goto err;
+			close(fd);
+			free(buffer);
+			free_maps(*maps);
+			*maps = NULL;
+			return -1;
 		}
 		if (head == NULL){
 			head = tmp;
@@ -353,14 +359,6 @@ int read_maps(pid_t pid, maps_list ** maps){
 	free(buffer);
 
 	return 0;
-
-err:
-	close(fd);
-	free(buffer);
-	free_maps(*maps);
-	*maps = NULL;
-
-	return -1;
 
 }
 
