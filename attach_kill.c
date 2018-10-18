@@ -79,19 +79,31 @@ int main(int argc, char ** argv){
 	ptrace_state state = {&registers, NULL, 0, 0};
 
 	if (pid_attach(pid.pid, &state)) {
-		printf("Error attaching\n");
+		printf("Error attaching.\n");
 		return 1;
 	}
 
 //	registers.rax = 4; //__NR_close;
+//	registers.rax = 4; //__NR_shutdown;
 //	registers.rdi = fd;
-	syscall_regs mod_regs = {48, fd, 0, 0, 0, 0, 0};
-	if (pid_inject_syscall(pid.pid, &state, &mod_regs) == -1){
-		printf("Error injecting syscall\n");
+	printf("Shutdown socket...\n");
+	syscall_regs mod_regs = {4, fd, 2, 0, 0, 0, 0};
+	int ret = pid_inject_syscall(pid.pid, &state, &mod_regs);
+	if (ret == -1){
+		printf("Error injecting syscall.\n");
+	} else if (ret == 0){
+		printf("Close socket file descriptor...\n");
+		mod_regs.rax = 4;
+		mod_regs.rdi = fd;
+		if (pid_inject_syscall(pid.pid, &state, &mod_regs) == -1){
+			printf("Error injecting syscall.\n");
+		}
+	} else if (ret == 1){
+		printf("Running the syscall killed the process.\n");
 	}
 
 	if (pid_detach(pid.pid, &state)) {
-		printf("Error detaching\n");
+		printf("Error detaching.\n");
 		return 1;
 	}
 
@@ -186,7 +198,6 @@ int pid_attach(pid_t pid, ptrace_state * state){
 	if ((0x000000000000ffff & data) == 0x050f){
 		/* Success finding the syscall interrupt address*/
 		state->syscall_addr = state->registers->rip - 2;
-		printf("Found a syscall interrupt address!\n");
 		return 0;
 	}
 
@@ -207,7 +218,6 @@ int pid_attach(pid_t pid, ptrace_state * state){
 		unsigned long syscall_addr = find_syscall_addr(pid, iter);
 		if (syscall_addr){
 			state->syscall_addr = syscall_addr;
-			printf("Found a syscall interrupt address!\n");
 			return 0;
 
 		}
@@ -276,9 +286,10 @@ retry:
 	waitpid(pid, &status, 0);
 
 	if (status){
-		if (WIFEXITED(status) ||
-		    WIFSIGNALED(status) ||
-		    WIFCONTINUED(status)){
+		if (WIFEXITED(status)){
+			return 1;
+		}
+		if (WIFSIGNALED(status) || WIFCONTINUED(status)){
 			return -1;
 		}
 		if (WIFSTOPPED(status)){
@@ -288,7 +299,6 @@ retry:
 	}
 
 	if (ptrace(PTRACE_GETREGS, pid, NULL, &mod_regs) == -1){
-		printf("adsasd\n");
 		return -1;
 	}
 	if (signal){
