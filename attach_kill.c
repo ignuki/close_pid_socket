@@ -4,11 +4,12 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
+#include <fcntl.h>
 #include <sys/ptrace.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/user.h>
+#include <sys/stat.h>
 #include <linux/limits.h>
 
 typedef union _pid_int {
@@ -29,7 +30,8 @@ typedef struct _maps_list {
 	struct _maps_list * prev;
 } maps_list;
 
-#define UPDATE_MAPS_LIST(h, t, k) t = ((t = (h = h ? h : k))->next = k)->prev = t)->next
+#define UPDATE_MAPS_LIST(h, t, k) \
+    t = k->prev = t, (t = h ? t : (h = h ? h : k))->next = k
 
 typedef struct _state {
 	struct user_regs_struct * registers;
@@ -39,8 +41,13 @@ typedef struct _state {
 } ptrace_state;
 
 int parse_int(char * s);
+unsigned int parse_ui_hex(char * s);
+unsigned long parse_ul_hex(char * s);
 int pid_attach(pid_t pid, ptrace_state * state);
-int read_maps(pid_t pid, maps_list * maps);
+int pid_detach(pid_t pid, ptrace_state * state);
+int read_maps(pid_t pid, maps_list ** maps);
+maps_list * parse_map(char * buffer);
+void free_maps(maps_list ** maps);
 
 /* argv[1] = pid */
 /* argv[2] = fd  */
@@ -52,45 +59,52 @@ int main(int argc, char ** argv){
 	}
 
 	pid_int pid;
-	int fd, sig;
+	int fd;
 
 	pid.n = parse_int(argv[1]);
 	fd = parse_int(argv[2]);
+
+    printf("pid: %i\nfd: %i\n", pid.n, fd);
 
 	struct user_regs_struct registers;
 	ptrace_state state = {&registers, NULL, 0, 0};
 
 	if (pid_attach(pid.pid, &state)) {
+        printf("Error attaching\n");
 		return 1;
 	}
-
-	// igual en rip no hay una syscall, habria que rastrear los mapas de
-	// memoria del proceso. Comprobar con PEEKTEXT
-	registers.rax = 4; //__NR_close;
-	registers.rdi = fd;
-	// registers.rip = syscall_addr;
-
-
-	ptrace(PTRACE_SETREGS, pid.pid, NULL, &registers);
-retry:
-	ptrace(PTRACE_SINGLESTEP, pid.pid, NULL, NULL);
-
-	int status = 0;
-	waitpid(pid.pid, &status, 0);
-
-	if (status){
-		if (WIFSTOPPED(status)){
-			if (WSTOPSIG(status) != SIGTRAP){
-				sig = status;
-				goto retry;
-			}
-		}
+	if (pid_detach(pid.pid, &state)) {
+        printf("Error detaching\n");
+		return 1;
 	}
-	if (sig){
-		kill(pid.pid, sig);
-	}
-
-	ptrace(PTRACE_DETACH, pid.pid, NULL, NULL);
+//
+//	// igual en rip no hay una syscall, habria que rastrear los mapas de
+//	// memoria del proceso. Comprobar con PEEKTEXT
+//	registers.rax = 4; //__NR_close;
+//	registers.rdi = fd;
+//	// registers.rip = syscall_addr;
+//
+//
+//	ptrace(PTRACE_SETREGS, pid.pid, NULL, &registers);
+//retry:
+//	ptrace(PTRACE_SINGLESTEP, pid.pid, NULL, NULL);
+//
+//	int status = 0;
+//	waitpid(pid.pid, &status, 0);
+//
+//	if (status){
+//		if (WIFSTOPPED(status)){
+//			if (WSTOPSIG(status) != SIGTRAP){
+//				sig = status;
+//				goto retry;
+//			}
+//		}
+//	}
+//	if (sig){
+//		kill(pid.pid, sig);
+//	}
+//
+//	ptrace(PTRACE_DETACH, pid.pid, NULL, NULL);
 
 	return 0;
 
@@ -109,16 +123,58 @@ int parse_int(char * s){
 
 }
 
+unsigned int parse_ui_hex(char * s){
+    
+    unsigned int r = 0;
+    
+    while (*s){
+        r *= 10;
+        if (*s <= '9'){
+            r += (*s++ - '0');
+        } else if (*s <= 'F'){
+            r += (*s++ - 'A') + 10;
+        } else {
+            r += (*s++ - 'a') + 10;
+        }
+    }
+
+    return r;
+
+}
+
+unsigned long parse_ul_hex(char * s){
+    
+    unsigned long r = 0;
+    
+    while (*s){
+        r *= 10;
+        if (*s <= '9'){
+            r += (*s++ - '0');
+        } else if (*s <= 'F'){
+            r += (*s++ - 'A') + 10;
+        } else {
+            r += (*s++ - 'a') + 10;
+        }
+    }
+
+    return r;
+
+}
+
 int pid_attach(pid_t pid, ptrace_state * state){
 
-	int ret, status;
-	siginfo_t siginfo = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+    if (state == NULL){
+        return -1;
+    }
+
+	int status;
+	siginfo_t siginfo = {0};
 
 	if (ptrace(PTRACE_GETSIGINFO, pid, NULL, &siginfo)){
-		if(ptrace(PTRACE_ATTACH, pid.pid, NULL, NULL) == -1){
+		if(ptrace(PTRACE_ATTACH, pid, NULL, NULL) == -1){
 			return -1;
 		}
-		if(waitpid(pid.pid, &status, 0) <= 0){
+		if(waitpid(pid, &status, 0) <= 0){
 			return -1;
 		}
 		if(!WIFSTOPPED(status)){
@@ -130,8 +186,8 @@ int pid_attach(pid_t pid, ptrace_state * state){
 		}
 	}
 
-	if (ptrace(PTRACE_GETREGS, pid.pid, NULL, state->registers)){
-		return -1:
+	if (ptrace(PTRACE_GETREGS, pid, NULL, state->registers)){
+		return -1;
 	}
 
 	/* is the next instruction a syscall? */
@@ -146,17 +202,35 @@ int pid_attach(pid_t pid, ptrace_state * state){
 
 	/* find the interrupt address across the memory maps of the process */
 	maps_list * maps = NULL;
-	if (read_maps(pid, maps)){
+	if (read_maps(pid, &maps)){
 		return -1;
 	}
+    state->maps = maps;
 
 	return 0;
 
 }
 
-int read_maps(pid_t pid, maps_list * maps){
+int pid_detach(pid_t pid, ptrace_state * state){
 
-	maps_list * head = maps, * tail = maps, * tmp;
+    if (state == NULL){
+        return -1;
+    }
+    
+	ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    free_maps(&state->maps);
+
+    return 0;
+
+}
+
+int read_maps(pid_t pid, maps_list ** maps){
+
+    if (maps == NULL){
+        return -1;
+    }
+
+	maps_list * head = *maps, * tail = *maps, * tmp;
 	char * buffer, * p;
 	int fd, buf_len = getpagesize();
 
@@ -173,11 +247,11 @@ int read_maps(pid_t pid, maps_list * maps){
 	}
 
 	while (read(fd, p, 1) > 0){
-		if (p++ != '\n'){
+		if (*p++ != '\n'){
 			continue;
 		}
 		*(p - 1) = 0;
-		tmp = parse_line(buffer);
+		tmp = parse_map(buffer);
 		if (tmp == NULL){
 			goto err;
 		}
@@ -193,23 +267,85 @@ int read_maps(pid_t pid, maps_list * maps){
 err:
 	close(fd);
 	free(buffer);
-	free_maps_list(maps);
+	free_maps(maps);
 
 	return -1;
 
 }
 
-maps_list * parse_line(char * buffer){
+maps_list * parse_map(char * buffer){
 
-	maps_list new = NULL;
+	maps_list * new = NULL;
 	char * p, * q;
+
+    if (buffer == NULL){
+        return NULL;
+    }
 
 	if ((new = malloc(sizeof(new[0]))) == NULL){
 		return NULL;
 	}
 
+    p = q = buffer;
+    while (*++q != '-');
+    *q = 0;
+    new->start = parse_ul_hex(p);
 
+    p = ++q;
+    while (*++q != ' ');
+    *q = 0;
+    new->end = parse_ul_hex(p);
+
+    p = ++q;
+    while (*++q != ' ');
+    *q = 0;
+    new->perms = 0;
+    if (*p++ == 'r') new->perms |= 4;
+    if (*p++ == 'w') new->perms |= 2;
+    if (*p++ == 'x') new->perms |= 1;
+    if (*p == 'p') new->perms |= 8;
+    if (*p == 's') new->perms |= 16;
+
+    p = ++q;
+    while (*++q != ' ');
+    *q = 0;
+    new->offset = parse_ul_hex(p);
+
+    p = ++q;
+    while (*++q != ':');
+    *q = 0;
+    new->dev_major = parse_ui_hex(p);
+
+    p = ++q;
+    while (*++q != ' ');
+    *q = 0;
+    new->dev_minor = parse_ui_hex(p);
+    
+    p = ++q;
+    while (*++q != ' ');
+    *q = 0;
+    new->inode = parse_ul_hex(p);
+
+    p = ++q;
+    snprintf(new->path, (PATH_MAX - 1), "%s", p);
 
 	return new;
+
+}
+
+void free_maps(maps_list ** maps){
+    
+    if (maps == NULL){
+        return;
+    }
+    maps_list * tmp;
+
+    while(*maps){
+        tmp = maps[0]->next;
+        free(*maps);
+        *maps = tmp;
+    }
+
+    return;
 
 }
