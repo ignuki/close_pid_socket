@@ -21,11 +21,6 @@ typedef struct _maps_list {
 	unsigned long start;
 	unsigned long end;
 	unsigned int perms;
-	unsigned long offset;
-	unsigned int dev_major;
-	unsigned int dev_minor;
-	unsigned long inode;
-	char path[PATH_MAX];
 	struct _maps_list * next;
 	struct _maps_list * prev;
 } maps_list;
@@ -401,30 +396,6 @@ maps_list * parse_map(char * buffer){
 	if (*p++ == 'x') new->perms |= 1;
 	if (*p == 'p') new->perms |= 8;
 	if (*p == 's') new->perms |= 16;
-
-	p = ++q;
-	while (*++q != ' ');
-	*q = 0;
-	new->offset = parse_ul_hex(p);
-
-	p = ++q;
-	while (*++q != ':');
-	*q = 0;
-	new->dev_major = parse_ui_hex(p);
-
-	p = ++q;
-	while (*++q != ' ');
-	*q = 0;
-	new->dev_minor = parse_ui_hex(p);
-
-	p = ++q;
-	while (*++q != ' ');
-	*q = 0;
-	new->inode = parse_ul_hex(p);
-
-	while (*++q == ' ');
-	p = q;
-	snprintf(new->path, (PATH_MAX - 1), "%s", p);
 
 	return new;
 
