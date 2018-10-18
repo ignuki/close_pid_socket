@@ -37,7 +37,7 @@ typedef struct _state {
 	unsigned long signal;
 } ptrace_state;
 
-typedef struc _syscall_regs {
+typedef struct _syscall_regs {
     unsigned long rax;
     unsigned long rdi;
     unsigned long rsi;
@@ -52,6 +52,7 @@ unsigned int parse_ui_hex(char * s);
 unsigned long parse_ul_hex(char * s);
 int pid_attach(pid_t pid, ptrace_state * state);
 int pid_detach(pid_t pid, ptrace_state * state);
+int pid_inject_syscall(pid_t pid, ptrace_state * state, syscall_regs * regs);
 unsigned long find_syscall_addr(pid_t pid, maps_list * maps);
 int read_maps(pid_t pid, maps_list ** maps);
 maps_list * parse_map(char * buffer);
@@ -82,16 +83,17 @@ int main(int argc, char ** argv){
 		return 1;
 	}
 
-    pid_inject_syscall(pid, &state, );
+//	registers.rax = 4; //__NR_close;
+//	registers.rdi = fd;
+    syscall_regs mod_regs = {48, fd, 0, 0, 0, 0, 0};
+    if (pid_inject_syscall(pid.pid, &state, &mod_regs) == -1){
+        printf("Error injecting syscall\n");
+    }
 
 	if (pid_detach(pid.pid, &state)) {
         printf("Error detaching\n");
 		return 1;
 	}
-//	registers.rax = 4; //__NR_close;
-//	registers.rdi = fd;
-//	// registers.rip = syscall_addr;
-//
 
 	return 0;
 
@@ -180,11 +182,12 @@ int pid_attach(pid_t pid, ptrace_state * state){
 	/* is the next instruction a syscall? */
 	unsigned long data = ptrace(PTRACE_PEEKTEXT, pid,
 				    state->registers->rip - 2, NULL);
+    printf("%lx\n%lx\n%lx\n", data, data & 0xffff, data & 0xffff);
 	/* the syscall interrupt code is 2 bytes long (0x050f) */
 	if ((0x000000000000ffff & data) == 0x050f){
 		/* Success finding the syscall interrupt address*/
 		state->syscall_addr = state->registers->rip - 2;
-        printf("Found a syscall interruption address!\n");
+        printf("Found a syscall interrupt address!\n");
 		return 0;
 	}
 
@@ -198,13 +201,14 @@ int pid_attach(pid_t pid, ptrace_state * state){
     maps_list * iter = state->maps;
     while (iter){
         if (!(iter->perms & 1)){
+            /* non-executable memory space */
             iter = iter->next;
             continue;
         }
         unsigned long syscall_addr = find_syscall_addr(pid, iter);
         if (syscall_addr){
 		        state->syscall_addr = syscall_addr;
-                printf("Found a syscall interruption address!\n");
+                printf("Found a syscall interrupt address!\n");
 		        return 0;
         
         }
@@ -212,6 +216,19 @@ int pid_attach(pid_t pid, ptrace_state * state){
     }
 
 	return -1;
+
+}
+
+int pid_detach(pid_t pid, ptrace_state * state){
+
+    if (state == NULL){
+        return -1;
+    }
+    
+	ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    free_maps(state->maps);
+
+    return 0;
 
 }
 
@@ -232,14 +249,53 @@ unsigned long find_syscall_addr(pid_t pid, maps_list * maps){
 
 }
 
-int pid_detach(pid_t pid, ptrace_state * state){
+int pid_inject_syscall(pid_t pid, ptrace_state * state, syscall_regs * regs){
 
-    if (state == NULL){
+    if (state == NULL || regs == NULL){
         return -1;
     }
+
+    struct user_regs_struct mod_regs = *state->registers;
+    mod_regs.rax = regs->rax;
+    mod_regs.rdi = regs->rdi;
+    mod_regs.rsi = regs->rsi;
+    mod_regs.rdx = regs->rdx;
+    mod_regs.r10 = regs->r10;
+    mod_regs.r8 = regs->r8;
+    mod_regs.r9 = regs->r9;
+    printf("%llx\n", mod_regs.rip);
+    mod_regs.rip = state->syscall_addr;
+    printf("%llx\n", mod_regs.rip);
+
+    if (ptrace(PTRACE_SETREGS, pid, NULL, &mod_regs) == -1){
+        return -1;
+    }
+
+    int status = 0, signal = 0;
+retry:
+    if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) == -1){
+        return -1;
+    }
+    waitpid(pid, &status, 0);
+
+    if (status){
+        if (WIFEXITED(status) || WIFSIGNALED(status) || WIFCONTINUED(status)){
+            return -1;
+        }
+        if (WIFSTOPPED(status)){
+            signal = (WSTOPSIG(status) != SIGTRAP) ? status : signal;
+            goto retry;
+        }
+    }
+
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &mod_regs) == -1){
+        return -1;
+    }
+    if (signal){
+        kill(pid, signal);
+    }
     
-	ptrace(PTRACE_DETACH, pid, NULL, NULL);
-    free_maps(state->maps);
+    ptrace(PTRACE_SETREGS, pid, NULL, &(state->registers));
 
     return 0;
 
